@@ -16,7 +16,7 @@ print(Sys.time())
 system.time(print(load( 'SafeDriverTrain.RData' ))) # 1s, 12mb, sd0.train
 system.time(print(load( 'SafeDriverTest.RData' ))) # 1s, 18mb, sd0.test, sd0.submission
 x.train <- as.matrix( sd0.train[,-2,drop=F] ) # including id, can be predictive
-y.train <- sd0.train[,2]
+prop.table(table( y.train <- sd0.train[,2], useNA='always' )) # balance=4/96%
 
 # create index for train/validation indicator
 set.seed(1, "L'Ecuyer-CMRG") # reproducible, multicore
