@@ -4,7 +4,7 @@
 #see also: https://github.com/Zindear/Applied-Multivariate-Data-Analysis
 #source('SafeDriver3.R',echo=T,max.deparse.length=Inf)
 
-require(xgboost) # otherwise base R
+require(xgboost) # otherwise this is all base R, install.packages('xgboost')
 basefile='SafeDriver3a' # just for keeping track of iterations
 Sys.umask( '0002' )
 dir.create( 'logs', showWarnings=F, recursive=T )
@@ -16,7 +16,7 @@ print(Sys.time())
 system.time(print(load( 'SafeDriverTrain.RData' ))) # 1s, 12mb, sd0.train
 system.time(print(load( 'SafeDriverTest.RData' ))) # 1s, 18mb, sd0.test, sd0.submission
 x.train <- as.matrix( sd0.train[,-2,drop=F] ) # including id, can be predictive
-prop.table(table( y.train <- sd0.train[,2], useNA='always' )) # balance=4/96%
+y.train <- sd0.train[,2]
 
 # create index for train/validation indicator
 set.seed(1, "L'Ecuyer-CMRG") # reproducible, multicore
@@ -44,7 +44,7 @@ d2 <- xgb.DMatrix(x.train[!itrain,], label=y.train[!itrain]) # validation frame
 #runlabel=paste0(basefile, '_run0')
 # params from https://www.kaggle.com/abhilashawasthi/forza-baseline Private Score 0.28164 Public Score 0.27999
 xgb.param1 <- list( eta=0.02, max_depth=4, subsample=0.9, colsample_bytree=0.9, objective='binary:logistic', seed=99, silent=T )
-# run1: try params from my tuning
+# run1: try params from my tuning (see SafeDriver2.R for my tuning experiments)
 #runlabel=paste0(basefile, '_run1')
 #xgb.param1 <- list( eta=0.03, max_depth=5, subsample=0.3, colsample_bytree=0.9, gamma=8, min_child_weight=120, objective='binary:logistic', seed=99, silent=T )
 # run2: try smote (doesn't do anything here?) list( sample='smote', ...)
