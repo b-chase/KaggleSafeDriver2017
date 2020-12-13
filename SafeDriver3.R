@@ -12,7 +12,9 @@ logfile <- file.path('logs', basefile)
 sink( file=logfile, split=T )
 print(Sys.time())
 
-#wget https://raw.githubusercontent.com/brunocampos01/porto-seguro-safe-driver-prediction/master/data/raw/datasets.zip; unzip datasets.zip # read into R and save xz-compressed RData file. single file too big for github, splitting ...
+temp <- tempfile()
+
+#get https://raw.githubusercontent.com/brunocampos01/porto-seguro-safe-driver-prediction/master/data/raw/datasets.zip; unzip datasets.zip # read into R and save xz-compressed RData file. single file too big for github, splitting ...
 system.time(print(load( 'SafeDriverTrain.RData' ))) # 1s, 12mb, sd0.train
 system.time(print(load( 'SafeDriverTest.RData' ))) # 1s, 18mb, sd0.test, sd0.submission
 x.train <- as.matrix( sd0.train[,-2,drop=F] ) # including id, can be predictive
