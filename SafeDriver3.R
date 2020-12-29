@@ -3,6 +3,7 @@
 # this approximates https://www.kaggle.com/abhilashawasthi/forza-baseline Private Score 0.28164 Public Score 0.27999
 #see also: https://github.com/Zindear/Applied-Multivariate-Data-Analysis
 #source('SafeDriver3.R',echo=T,max.deparse.length=Inf)
+setwd("C:/Users/bcraw/OneDrive/Documents/Barclay 2020/KaggleSafeDriver2017")
 
 require(xgboost) # otherwise this is all base R, install.packages('xgboost')
 basefile='SafeDriver3a' # just for keeping track of iterations
