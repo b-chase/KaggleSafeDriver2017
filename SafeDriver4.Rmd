@@ -37,152 +37,94 @@ set.seed(1, "L'Ecuyer-CMRG") # reproducible, multicore
 
 ```
 
-```{r building ML model}
-#require(MLmetrics) # for NormalizedGini(), gini=2*AUC−1, maps AUC to [0,1]
-NormalizedGini <- function (y_pred, y_true) {
-    SumGini <- function(y_pred, y_true) {
-        y_true_sort <- as.numeric(y_true)[order(y_pred, decreasing=T)]
-        y_Lorentz <- cumsum(y_true_sort)/sum(y_true_sort)
-        y_random <- 1:length(y_pred)/length(y_pred)
-        return(sum(y_Lorentz - y_random))
-    }
-    return(NormalizedGini <- SumGini(y_pred, y_true)/SumGini(y_true, y_true))
-}
-NormalizedGiniXGB <- function( y_pred, y_train ){
-    y_true = getinfo( y_train, 'label')
-    score = NormalizedGini( y_pred, y_true )
-    return(list( metric="ngini", value=score ))
-}
+The data should be organized into different cohorts, and subsets should be left out for testing, validation, and cross-validation
+```{r organizing the data}
+# reduce for easier fitting at first
+# keep <- sample(c(T,F), nrow(x.train), replace = T, prob = c(0.05, 0.95))
 
-rocAUC <- function(y_pred, y_train, plot_out=FALSE, xgb=TRUE) {
-    if (xgb) {y_true = getinfo(y_train, 'label')} else {y_true = y_train}
-    res <- data.frame(y_true=as.numeric(y_true), y_pred=as.numeric(y_pred))[order(y_pred, decreasing = TRUE),]
-    TPR <- cumsum(res$y_true)/sum(res$y_true)
-    FPR <- cumsum(!res$y_true)/sum(!res$y_true)
+# for cross-validation
+cohort <- sample(seq(11), size=nrow(x.train), replace = T, prob = c(rep(1, 10), 2))
+# cohort==11 is the holdout sample for entire validation 
+
+`%notin%` <- Negate(`%in%`)
+
+training.x <- x.train[cohort %notin% c(1,11),]
+training.y <- y.train[cohort %notin% c(1,11)]
+reselect_ids <- sample(seq_along(training.y), size=10000, replace=T, prob=15*training.y+1)
+
+d.train <- xgb.DMatrix(training.x[reselect_ids,], label = training.y[reselect_ids])
+d.valid <- xgb.DMatrix(x.train[cohort==1,], label=y.train[cohort==1])
+d.holdout <- xgb.DMatrix(x.train[cohort==11,], label=y.train[cohort==11])
+
+watchlist <- list(train=d.train, valid=d.valid)
+```
+
+
+```{r designing a model}
+ROC_AUC <- function(y_pred, y_train, plot_out = F) {
+    ordering <- order(y_pred, decreasing=TRUE)
+    y_true = getinfo(y_train, 'label')[ordering]
+    y_pred <- y_pred[ordering]
+    
+    TPR <- cumsum(y_true)/sum(y_true)
+    FPR <- cumsum(!y_true)/sum(!y_true)
     dFPR <- c(diff(FPR), 0)
     dTPR <- c(diff(TPR), 0)
     AUC <- sum(TPR * dFPR) + sum(dTPR * dFPR)/2 # final AUC
     if (plot_out) {
         #print(summary(cbind(TPR, FPR, dFPR, dTPR)))
-        plot(FPR, TPR)
+        plot(FPR, TPR, main = paste0("AUC equal to: ", signif(AUC,5)))
     }
     return(list(metric="ROC_AUC", value=AUC))
 }
-prAUC <- function(y_pred, y_train, plot_out=FALSE, xgb=TRUE) {
-    if (xgb) {y_true <- getinfo(y_train, 'label')} else {y_true <- y_train}
-    
-    res <- data.frame(y_true=y_true, y_pred=y_pred)
-    res <- res[order(res$y_pred, decreasing=FALSE),]
-    n <- nrow(res)
-    res$true_pos <- cumsum(res$y_true)
-    res$true_neg <- sum(!res$y_true) - cumsum(!res$y_true)
-    res$false_pos <- seq(n) - res$true_pos
-    res$false_neg <- n - seq(n) - res$true_neg
-    res$precision <- res$true_pos / (res$true_pos + res$false_pos) # true positive over all marked positive
-    res$recall <- res$true_pos / (res$true_pos + res$false_neg) # true positive over all actual positive
-    
-    res$dprec <- c(diff(res$precision), 0)
-    res$drec <- c(diff(res$recall), 0)
-    AUC <- sum(res$precision*res$drec) + sum(-res$dprec*res$drec)/2
-    
-    if (plot_out) {
-        plot(res$recall, res$precision)
-    }
-    print(res)
-    return(list(metric="PR_AUC", value=AUC, table="res"))
+
+
+weird_eval <- function(y_pred, y_train, plot_out=F, cutoff=0.5) {
+  ordering <- order(y_pred, decreasing=T)
+  n <- length(y_pred)
+  
+  y_pred <- sapply(y_pred[ordering], max, 0)
+  y_true = getinfo(y_train, 'label')[ordering][ordering]
+  
+  get_score <- function(cutoff) {
+    measure_a <- sapply(y_pred, max, cutoff) * !y_true
+    measure_b <- sapply(y_pred, min, cutoff) * y_true
+    overest <- cumsum(measure_a)
+    underest <- sum(measure_b) - cumsum(measure_b)
+    score <- (overest - underest)/n
+    #print(data.frame(y_pred, y_true, measure_a, measure_b, overest, underest, score))
+    score
+  }
+  scores <- get_score(cutoff = cutoff)
+  
+  if (plot_out) {
+    par(mfcol=c(1,1))
+    plot(y_pred, scores, type="l", ylim = c(-0.2, 1.2))
+    points(y_pred, y_true, col="red")
+  }
+  
+  range_preds <- max(y_pred) - min(y_pred) # penalize trees that don't bother making stronger predictions
+  return(list(metric="weird_score", value=max(scores) * range_preds))
 }
 
-logit <- function(p) {log(p/(1-p))}
-logistic <- function(a) {1/(1+exp(-a))}
 
-# test prAUC
-real.y <- rbinom(1000, 1, 0.5)
-guess.y <- (real.y + 2*runif(real.y))/2.95
+xgb_params <- list(eta=0.02, gamma=30, max_depth=6, subsample=0.4, objective="binary:logistic", min_child_weight=0.1)
+mx1 <- xgb.train(params = xgb_params, data = d.train, nrounds=5000, feval=weird_eval, maximize = F, watchlist = watchlist, early_stopping_rounds = 100, print_every_n = 100)
 
-prAUC(guess.y, real.y, plot_out = TRUE, xgb=FALSE)
+# check against holdout
+par(mfcol=c(1,2))
+pred.y <- predict(mx1, d.holdout)
+ROC_AUC(pred.y, d.holdout, plot_out=T)
+rand.y <- runif(pred.y)
+ROC_AUC(rand.y, d.holdout, plot_out = T)
 
-res <- data.frame(y_true=real.y, y_pred=guess.y)
-
-```
-
-```{r dividing up data into cohorts}
-#divide the data
-itrain <- sample( c("train", "val", "test"), size=nrow(x.train), replace=T, prob=c(0.7, 0.15, 0.15))
-num.train <- sum(itrain=='train')
-
-prop.table(table(itrain))
-print("Summary of dependent variable in training set:")
-summary(y.train[itrain=='train'])
-
-# XGBoost
-d1 <- xgb.DMatrix(x.train[itrain=="train",], label=y.train[itrain=="train"]) # training frame
-d2 <- xgb.DMatrix(x.train[itrain=="val",], label=y.train[itrain=="val"]) # validation frame
-d3 <- xgb.DMatrix(x.train[itrain=="test",], label=y.train[itrain=="test"]) # test frame
-#runlabel=paste0(basefile, '_run0')
-# params from https://www.kaggle.com/abhilashawasthi/forza-baseline Private Score 0.28164 Public Score 0.27999
-xgb.param1 <- list( eta=0.02, max_depth=4, subsample=0.9, colsample_bytree=0.9, objective='binary:logistic', seed=99, silent=T )
-# run1: try params from my tuning (see SafeDriver2.R for my tuning experiments)
-#runlabel=paste0(basefile, '_run1')
-#xgb.param1 <- list( eta=0.03, max_depth=5, subsample=0.3, colsample_bytree=0.9, gamma=8, min_child_weight=120, objective='binary:logistic', seed=99, silent=T )
-# run2: try smote (doesn't do anything here?) list( sample='smote', ...)
-
-```
-
-```{r model 1}
-# forza: Best iteration: [759] train-gini:0.349262 valid-gini:0.277611
-# run0 from raw data: Best iteration: [685]   train-ngini:0.345306    valid-ngini:0.278298
-# run1: 200s, Best iteration: [667]   train-ngini:0.326298    valid-ngini:0.278089
-# run2: 186s, Best iteration: [685]   train-ngini:0.345306    valid-ngini:0.278298
-
-watchlist <- list(train=d1, val=d2)
-system.time(mx1 <- xgb.train( xgb.param1, d1, nrounds=5000, feval=NormalizedGiniXGB, maximize=T, watchlist=watchlist, early_stopping_rounds=100, print_every_n=100 )) #verbose_eval=100 ))
-
-pred.out <- predict(mx1, d3)
-pred.acc <- NormalizedGiniXGB(pred.out, d3)
-print(pred.acc)
+fitted.y <- predict(mx1, d.train)
+weird_eval(fitted.y, d.train, plot_out = T)
+weird_eval(rand.y[1:length(fitted.y)], d.train, plot_out = T)
 ```
 
 
-```{r model 2}
-system.time(mx2 <- xgb.train( xgb.param1, d1, nrounds=5000, feval=rocAUC, maximize=T, watchlist=watchlist, early_stopping_rounds=100, print_every_n=50 )) #verbose_eval=100 ))
 
-pred.out <- predict(mx2, d3)
-pred.acc <- rocAUC(pred.out, d3, plot_out = TRUE)
-print(pred.acc)
-```
-
-```{r model 3}
-system.time(mx3 <- xgb.train( xgb.param1, d1, nrounds=5000, feval=prAUC, maximize=T, watchlist=watchlist, early_stopping_rounds=100, print_every_n=100 )) #verbose_eval=100 ))
-
-pred.out <- predict(mx2, d3)
-pred.acc <- prAUC(pred.out, d3, plot_out = TRUE)
-print(pred.acc)
-```
-
-```{r other stuff}
-stopifnot(!is.na(l1 <- match( sd0.test$id, sd0.submission$id ))) # table(diff(l1))==1, just checking
-sd0.submission$target[l1] <- predict( mx1, xgb.DMatrix(as.matrix(sd0.test)), ntree_limit=mx1$best_ntreelimit+50 )
-write.csv( sd0.submission, paste0(runlabel,'.csv'), quote=F, row.names=F )
-summary( sd0.submission )
-# run0 from raw data:
-#       id              target        
-# Min.   :      0   Min.   :0.008626  
-# 1st Qu.: 372022   1st Qu.:0.024335  
-# Median : 744307   Median :0.032311  
-# Mean   : 744154   Mean   :0.036672  
-# 3rd Qu.:1116308   3rd Qu.:0.043319  
-# Max.   :1488026   Max.   :0.712561
-
-#wget -O SafeDriverForzaSubmission.csv 'https://www.kaggleusercontent.com/kf/1560289/eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..XbCGxC5g1DcEPkF841adXg.ZOK0clRpVXRIXNOwVj_Zvn8q6um_4gflCD76QUcKW1cU6qFXV8x_OtCzQd_DV4i9zPyZ66vLdnhuM4eoV4WdfOz57pilQXG2Ql_jFTRNdUN58kpwdP1LbqyHNhX16qLuMFUQYH6k8auStwcSHjVqSw.HbFLbnzd8_4cebI9X8_fBg/submission.csv'
-fs1 <- read.csv( 'SafeDriverForzaSubmission.csv.xz' )
-sqrt(mean(( fs1$target - sd0.submission$target )^2))
-NormalizedGini( sd0.submission$target, fs1$target )
-# run0 from raw data: 0.004959259, 0.9785352
-# run1 from raw data: 0.007237502, 0.967153
-
-print(Sys.time())
-if( sink.number() > 0 ) sink( file=NULL )
-```
 
 
 
